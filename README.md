@@ -1,5 +1,8 @@
 # Debian and Kali Railway desktops
 
-Private, persistent XFCE desktops for Railway. This branch adds independent `debian/` and `kali/` builds; it does not change the existing Ubuntu or Chromium builds on main.
+Private XFCE desktops for Railway with generated authentication, Firefox ESR, protected file downloads and a persistent home directory.
 
-See the README in each distribution directory.
+- [Debian 13 (Trixie)](debian/README.md)
+- [Kali Linux Rolling](kali/README.md)
+
+Each distribution has its own Dockerfile and Railway configuration. Set the service root directory to `/debian` or `/kali`, attach a volume at `/config`, expose port `3000` and provide a strong `PASSWORD`. The template generates a unique password on deployment.
