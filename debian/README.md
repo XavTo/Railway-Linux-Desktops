@@ -56,7 +56,7 @@ Set `PASSWORD` and redeploy to update both the web login and Linux account passw
 
 ### What if the browser shows a blank screen?
 
-If the service has less than 500 MB of RAM, the `/config` volume is missing or read-only, or it has less than 32 MiB free, the service domain shows the resource issue. The page rechecks every 15 seconds and starts the desktop once the issue is resolved.
+If the service has less than 500 MB of RAM, the `/config` volume is missing or read-only, or it has less than 32 MiB free, the service domain shows the resource issue. The service rechecks every 15 seconds and starts the desktop if resources become available. If the issue persists for 10 minutes, the service stops cleanly. Adjust the resources, then restart the deployment in Railway.
 
 Wait for the service to become healthy, reload the page and check Railway runtime logs. The readiness endpoint verifies that the X display, XFCE session and private relays have started. WebSocket access must be allowed by your browser and network. Close unused heavy browser tabs if your workstation is short of memory.
 
