@@ -13,6 +13,7 @@ import threading
 import time
 
 from runtime_checks import has_loopback_listener, monitor_desktop, signal_process_group
+from startup_resources import wait_for_resources
 
 password = os.environ.get('PASSWORD', '')
 username = os.environ.get('CUSTOM_USER') or 'admin'
@@ -33,23 +34,30 @@ if not (800 <= width <= 2560 and 600 <= height <= 1440):
 
 account = pwd.getpwnam('headless')
 home = Path('/config')
-home.mkdir(exist_ok=True)
-# Seed only missing top-level paths. Never overwrite a user's profile on redeploy.
-for source in Path('/opt/desktop-seed').iterdir():
-    target = home / source.name
-    if target.exists() or target.is_symlink():
-        continue
-    with TemporaryDirectory(dir=home, prefix='.desktop-seed-') as staging:
-        candidate = Path(staging) / source.name
-        if source.is_dir():
-            shutil.copytree(source, candidate, symlinks=True)
-        else:
-            shutil.copy2(source, candidate, follow_symlinks=False)
-        if not target.exists() and not target.is_symlink():
-            candidate.rename(target)
-for name in ['Downloads', 'Desktop', '.config', '.cache', '.local/share']:
-    (home / name).mkdir(parents=True, exist_ok=True)
-subprocess.run(['chown', '-R', 'headless:headless', str(home)], check=True)
+
+
+def prepare_home():
+    home.mkdir(exist_ok=True)
+    # Seed missing paths atomically so a failed copy can be retried.
+    for source in Path('/opt/desktop-seed').iterdir():
+        target = home / source.name
+        if target.exists() or target.is_symlink():
+            continue
+        with TemporaryDirectory(dir=home, prefix='.desktop-seed-') as staging:
+            candidate = Path(staging) / source.name
+            if source.is_dir():
+                shutil.copytree(source, candidate, symlinks=True)
+            else:
+                shutil.copy2(source, candidate, follow_symlinks=False)
+            if not target.exists() and not target.is_symlink():
+                candidate.rename(target)
+    for name in ['Downloads', 'Desktop', '.config', '.cache', '.local/share']:
+        (home / name).mkdir(parents=True, exist_ok=True)
+    subprocess.run(['chown', '-R', 'headless:headless', str(home)], check=True)
+
+
+if not wait_for_resources(home, port, prepare_home):
+    raise SystemExit(0)
 session_runtime = Path(mkdtemp(prefix='desktop-xdg-', dir='/run'))
 os.chown(session_runtime, account.pw_uid, account.pw_gid)
 subprocess.run(['chpasswd'], input='headless:' + password + '\n', text=True, check=True)

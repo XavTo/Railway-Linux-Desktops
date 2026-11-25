@@ -9,7 +9,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin
     && chmod 1777 /tmp/.X11-unix /tmp/.ICE-unix \
     && chmod 644 /etc/passwd /etc/group
 COPY entrypoint.py /opt/railway-desktop.py
-COPY runtime_checks.py configure_defaults.py /opt/
+COPY runtime_checks.py startup_resources.py configure_defaults.py /opt/
 RUN python3 /opt/configure_defaults.py
 ENV HOME=/config PORT=3000 VNC_RESOLUTION=1440x900 NOVNC_HOME=/usr/share/novnc LANG=C.UTF-8
 WORKDIR /config
