@@ -1,7 +1,7 @@
 FROM kalilinux/kali-rolling@sha256:73915d5d54833d498f52fd200960126be4a2dbdcc110d75d70839c4ef155ed03
 ARG DEBIAN_FRONTEND=noninteractive
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d \
-    && apt-get update && apt-get install -y --no-install-recommends xfce4 xfce4-terminal xfce4-notifyd tumbler tigervnc-standalone-server tigervnc-common novnc websockify nginx openssl python3 python3-venv python3-pip dbus-x11 x11-utils xauth procps sudo tini firefox-esr ca-certificates curl wget git jq unzip iproute2 iputils-ping dnsutils netcat-openbsd fonts-dejavu-core at-spi2-core desktop-base librsvg2-common nmap kali-menu \
+    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends xfce4 xfce4-terminal xfce4-notifyd tumbler tigervnc-standalone-server tigervnc-common novnc websockify nginx openssl python3 python3-venv python3-pip dbus-x11 x11-utils xauth procps sudo tini firefox-esr ca-certificates curl wget git jq unzip iproute2 iputils-ping dnsutils netcat-openbsd fonts-dejavu-core at-spi2-core desktop-base librsvg2-common nmap kali-menu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1001 --create-home --home-dir /config --shell /bin/bash --groups sudo headless \
     && install -d /opt/desktop-seed /config /tmp/.X11-unix /tmp/.ICE-unix \

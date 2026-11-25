@@ -8,19 +8,23 @@ import re
 import shutil
 import signal
 import subprocess
+from tempfile import TemporaryDirectory, mkdtemp
 import threading
 import time
 
-from runtime_checks import has_loopback_listener
+from runtime_checks import has_loopback_listener, monitor_desktop, signal_process_group
 
 password = os.environ.get('PASSWORD', '')
-username = os.environ.get('CUSTOM_USER', 'admin')
+username = os.environ.get('CUSTOM_USER') or 'admin'
 if len(password) < 16 or '\n' in password or '\r' in password:
     raise SystemExit('PASSWORD must contain at least 16 characters and no line breaks.')
 if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', username):
     raise SystemExit('CUSTOM_USER must be a simple nonempty username.')
-port = int(os.environ.get('PORT', '3000'))
-resolution = os.environ.get('VNC_RESOLUTION', '1440x900')
+try:
+    port = int(os.environ.get('PORT') or '3000')
+except ValueError:
+    raise SystemExit('PORT must be a number between 1024 and 65535.') from None
+resolution = os.environ.get('VNC_RESOLUTION') or '1440x900'
 if not 1024 <= port <= 65535 or not re.fullmatch(r'\d{3,4}x\d{3,4}', resolution):
     raise SystemExit('Invalid PORT or VNC_RESOLUTION')
 width, height = map(int, resolution.split('x'))
@@ -33,15 +37,21 @@ home.mkdir(exist_ok=True)
 # Seed only missing top-level paths. Never overwrite a user's profile on redeploy.
 for source in Path('/opt/desktop-seed').iterdir():
     target = home / source.name
-    if not target.exists() and not target.is_symlink():
+    if target.exists() or target.is_symlink():
+        continue
+    with TemporaryDirectory(dir=home, prefix='.desktop-seed-') as staging:
+        candidate = Path(staging) / source.name
         if source.is_dir():
-            shutil.copytree(source, target, symlinks=True)
+            shutil.copytree(source, candidate, symlinks=True)
         else:
-            shutil.copy2(source, target, follow_symlinks=False)
-for name in ['Downloads', 'Desktop', '.config', '.cache', '.local/share', '.runtime']:
+            shutil.copy2(source, candidate, follow_symlinks=False)
+        if not target.exists() and not target.is_symlink():
+            candidate.rename(target)
+for name in ['Downloads', 'Desktop', '.config', '.cache', '.local/share']:
     (home / name).mkdir(parents=True, exist_ok=True)
 subprocess.run(['chown', '-R', 'headless:headless', str(home)], check=True)
-os.chmod(home / '.runtime', 0o700)
+session_runtime = Path(mkdtemp(prefix='desktop-xdg-', dir='/run'))
+os.chown(session_runtime, account.pw_uid, account.pw_gid)
 subprocess.run(['chpasswd'], input='headless:' + password + '\n', text=True, check=True)
 
 hashed = subprocess.run(['openssl', 'passwd', '-6', '-stdin'], input=password,
@@ -116,7 +126,7 @@ novnc_home = Path(os.environ.get('NOVNC_HOME', '/usr/share/novnc'))
 
 environment = os.environ.copy()
 environment.update(HOME='/config', USER='headless', LOGNAME='headless', DISPLAY=':1',
-                   XDG_RUNTIME_DIR='/config/.runtime')
+                   XDG_RUNTIME_DIR=str(session_runtime))
 # Do not pass the web login password or unrelated Railway secrets to desktop apps.
 for name in list(environment):
     if name in {'PASSWORD', 'VNC_PW'} or any(word in name for word in ('TOKEN', 'API_KEY', 'SECRET', 'PASSWORD')):
@@ -134,9 +144,12 @@ def listening(port):
     return has_loopback_listener(port)
 
 def display_ready():
-    return subprocess.run(['xdpyinfo', '-display', ':1'], env=environment,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3,
-        user=account.pw_uid, group=account.pw_gid, extra_groups=[]).returncode == 0
+    try:
+        return subprocess.run(['xdpyinfo', '-display', ':1'], env=environment,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3,
+            user=account.pw_uid, group=account.pw_gid, extra_groups=[]).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 def process_exists(name):
     return subprocess.run(['pgrep', '-u', str(account.pw_uid), '-x', name],
@@ -173,10 +186,15 @@ launch('display', [shutil.which('Xvnc') or 'Xtigervnc', ':1', '-geometry', resol
 deadline = time.monotonic() + 45
 while not display_ready():
     if children['display'].poll() is not None or time.monotonic() > deadline:
-        subprocess.run(['xdpyinfo', '-display', ':1'], env=environment, stdout=subprocess.DEVNULL)
         raise SystemExit('The graphical display did not start')
     time.sleep(0.5)
-launch('desktop', ['dbus-run-session', '--', 'startxfce4'])
+
+
+def start_desktop():
+    launch('desktop', ['dbus-run-session', '--', 'startxfce4'])
+
+
+start_desktop()
 launch('websocket', [shutil.which('websockify') or str(novnc_home / 'utils/websockify/run'),
     '--web', str(novnc_home), '127.0.0.1:6901', '127.0.0.1:5901'])
 launch('proxy', ['nginx', '-c', '/run/desktop-nginx.conf', '-g', 'daemon off;'], user=False)
@@ -186,21 +204,18 @@ def stop(*args):
 for sig in [signal.SIGTERM, signal.SIGINT]:
     signal.signal(sig, stop)
 print('[railway] Private desktop started; only the authenticated HTTP proxy is public.', flush=True)
-failed = False
-while not stopping.wait(1):
-    for name, process in children.items():
-        if process.poll() is not None:
-            print('[railway] Required process stopped: ' + name, flush=True)
-            failed = True
-            stopping.set()
-            break
-for process in reversed(list(children.values())):
-    if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
-for process in children.values():
-    try:
-        process.wait(timeout=8)
-    except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
-server.shutdown()
-raise SystemExit(1 if failed else 0)
+try:
+    clean_exit = monitor_desktop(children, stopping, start_desktop)
+finally:
+    stopping.set()
+    for process in reversed(list(children.values())):
+        signal_process_group(process, signal.SIGTERM)
+    for process in children.values():
+        try:
+            process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            signal_process_group(process, signal.SIGKILL)
+            process.wait()
+    server.shutdown()
+    shutil.rmtree(session_runtime, ignore_errors=True)
+raise SystemExit(0 if clean_exit else 1)
